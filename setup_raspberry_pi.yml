@@ -1,0 +1,96 @@
+---
+- name: Configure Raspberry Pi for Node-RED
+  hosts: raspberry_pi
+  become: true
+  tasks:
+    # Update en upgrade
+    - name: Update APT package cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    # Nodig om Node.js te installeren
+    - name: Install dependencies for Node.js
+      apt:
+        name:
+          - build-essential
+          - curl
+          - git
+        state: present
+
+    # Install Node.js en npm
+    - name: Install Node.js using NodeSource
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    # Install Node-RED via npm globally
+    - name: Install Node-RED globally via npm
+      shell: |
+        sudo npm install -g --unsafe-perm node-red
+      args:
+        creates: /usr/local/bin/node-red
+
+    # Stop Node-RED service if it's running
+    - name: Check if Node-RED is running on port 1881
+      shell: lsof -t -i:1881 || true
+      register: node_red_pid
+      ignore_errors: true
+
+    - name: Kill the process using port 1881 if it exists
+      shell: kill -9 {{ node_red_pid.stdout }}
+      when: node_red_pid.stdout != ''
+      ignore_errors: true
+
+    - name: Stop Node-RED service
+      systemd:
+        name: node-red
+        state: stopped
+      ignore_errors: true
+
+    # Node-RED als service instellen
+    - name: Create Node-RED systemd service
+      copy:
+        dest: /etc/systemd/system/node-red.service
+        content: |
+          [Unit]
+          Description=Node-RED
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/bin/env node-red
+          Restart=always
+          RestartSec=10
+          User=yer
+          Group=yer
+          Environment="NODE_OPTIONS=--max-old-space-size=256"
+          WorkingDirectory=/home/yer
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+        - Enable and start Node-RED service
+
+    - name: Set correct permissions on Node-RED systemd service file
+      file:
+        path: /etc/systemd/system/node-red.service
+        mode: '0644'
+        owner: root
+        group: root
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Node-RED service
+      systemd:
+        name: node-red
+        enabled: yes
+        state: started
